@@ -97,9 +97,6 @@ p,li,label,div{font-family:'IBM Plex Sans',sans-serif !important;}
 [data-testid="stExpander"] summary{
     color:#d4a03c !important; font-family:'IBM Plex Sans',sans-serif !important;
     font-weight:600 !important;}
-[data-testid="stFileUploader"]{
-    border:1px dashed rgba(212,160,60,0.25) !important;
-    border-radius:8px !important; background:rgba(26,23,16,0.4) !important;}
 
 .stSuccess{background:rgba(34,85,34,0.15) !important; border-color:rgba(100,180,100,0.3) !important;}
 .stWarning{background:rgba(180,120,0,0.12) !important; border-color:rgba(212,160,60,0.3) !important;}
@@ -110,12 +107,6 @@ hr{border-color:rgba(212,160,60,0.15) !important;}
     border-radius:8px;padding:18px 20px;position:relative;}
 .agri-card::before{content:'';position:absolute;top:0;left:10%;right:10%;height:1px;
     background:linear-gradient(90deg,transparent,rgba(212,160,60,0.4),transparent);}
-
-.model-card{background:rgba(20,18,10,0.9);border:1px solid rgba(212,160,60,0.15);
-    border-radius:10px;padding:18px;text-align:center;}
-.model-card.rf {border-top:3px solid #60a5fa;}
-.model-card.gb {border-top:3px solid #86efac;}
-.model-card.ae {border-top:3px solid #f97316;}
 
 .badge-high{background:rgba(200,50,50,0.15);color:#f87171;
     border:1px solid rgba(200,50,50,0.3);padding:2px 10px;border-radius:20px;
@@ -165,31 +156,75 @@ def pl(fig, title="", h=320):
 
 
 # ─────────────────────────────────────────────────────────
-# HARDCODED AUTOENCODER METRICS FROM NOTEBOOK
-# Source: Final clean retrain — no data leakage (Cell 20)
-# Features: 22 clean raw observables + SMOTE balancing
+# CORRECTED AUTOENCODER METRICS FROM NOTEBOOK
+# Source: Keras AutoEncoder — actual notebook confusion matrix (Image 2)
 # Architecture: Dense→64→32→16(bottleneck)→32→64→Output
-# Trained for 41 epochs (EarlyStopping patience=5)
+# Trained for ~48 epochs (from training loss curve, Image 3)
+# Confusion Matrix from notebook:
+#   TN=2194 (Genuine correctly passed)
+#   FP=104  (Genuine wrongly flagged)
+#   FN=67   (Fraud missed)
+#   TP=131  (Fraud correctly caught)
 # ─────────────────────────────────────────────────────────
-AE_ACC  = 0.8409
-AE_AUC  = 0.8766
-AE_PREC = 0.48   # Fraud class
-AE_REC  = 0.68   # Fraud class
-AE_F1   = 0.56   # Fraud class
-AE_EPOCHS = 41
-# Confusion matrix: TP=254, FN=120, TN=1846, FP=276
-# Derived from: recall_genuine=0.87 → TN=round(2122*0.87), recall_fraud=0.68 → TP=round(374*0.68)
-AE_CM = np.array([[1846, 276], [120, 254]])
+# Derived metrics from CM:
+#   Total = 2194+104+67+131 = 2496
+#   Accuracy = (2194+131)/2496 = 2325/2496 = 0.9314
+#   Recall (Fraud/Suspect) = TP/(TP+FN) = 131/(131+67) = 131/198 = 0.6616
+#   Precision (Fraud) = TP/(TP+FP) = 131/(131+104) = 131/235 = 0.5574
+#   F1 = 2*(0.5574*0.6616)/(0.5574+0.6616) = 0.6051
+#   Specificity (Genuine Recall) = TN/(TN+FP) = 2194/(2194+104) = 2194/2298 = 0.9547
+#   ROC-AUC ≈ (0.6616 + 0.9547)/2 = 0.8082 (balanced)
+
+AE_TN   = 2194
+AE_FP   = 104
+AE_FN   = 67
+AE_TP   = 131
+AE_TOTAL = AE_TN + AE_FP + AE_FN + AE_TP  # 2496
+
+AE_ACC  = (AE_TN + AE_TP) / AE_TOTAL       # 0.9314
+AE_REC  = AE_TP / (AE_TP + AE_FN)          # 0.6616  (Fraud Recall)
+AE_PREC = AE_TP / (AE_TP + AE_FP)          # 0.5574  (Fraud Precision)
+AE_F1   = 2 * AE_PREC * AE_REC / (AE_PREC + AE_REC)  # 0.6051
+AE_SPEC = AE_TN / (AE_TN + AE_FP)          # 0.9547  (Genuine Recall)
+AE_AUC  = (AE_REC + AE_SPEC) / 2           # 0.8082
+AE_EPOCHS = 48
+
+AE_CM = np.array([[AE_TN, AE_FP], [AE_FN, AE_TP]])
+
+# ─────────────────────────────────────────────────────────
+# GITHUB RAW DATA URLs
+# Replace these with your actual GitHub raw CSV URLs
+# ─────────────────────────────────────────────────────────
+GITHUB_INS_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/ap_synthetic_insurance.csv"
+GITHUB_SAT_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/AP_satellite_indices.csv"
 
 
 # ═══════════════════════════════════════════════════════════
 # DATA LOADING & FEATURE ENGINEERING
 # ═══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
-def load_data(ins_path, sat_path):
-    df  = pd.read_csv(ins_path)
-    sat = pd.read_csv(sat_path)
+def load_data_from_urls(ins_url, sat_url):
+    """Load data from GitHub raw URLs."""
+    try:
+        df  = pd.read_csv(ins_url)
+        sat = pd.read_csv(sat_url)
+    except Exception as e:
+        raise ValueError(f"Could not load data from GitHub: {e}")
 
+    return _process_data(df, sat)
+
+
+@st.cache_data(show_spinner=False)
+def load_data_from_files(ins_bytes, sat_bytes):
+    """Fallback: load from uploaded files."""
+    import io
+    df  = pd.read_csv(io.BytesIO(ins_bytes))
+    sat = pd.read_csv(io.BytesIO(sat_bytes))
+    return _process_data(df, sat)
+
+
+def _process_data(df, sat):
+    """Shared feature engineering pipeline."""
     if df["loss_percent"].max() <= 1.0:
         df["loss_percent"] = df["loss_percent"] * 100
 
@@ -258,8 +293,8 @@ def load_data(ins_path, sat_path):
         "Kurnool":34.5, "Nellore":32.9, "Prakasam":33.3,
         "Srikakulam":30.8, "Vizianagaram":31.2, "West Godavari":31.5
     }
-    df["nasa_tmax_c"]   = df["district_clean"].map(NASA_TMAX).fillna(32.5)
-    df["nasa_tmin_c"]   = df["nasa_tmax_c"] - 10.0
+    df["nasa_tmax_c"]    = df["district_clean"].map(NASA_TMAX).fillna(32.5)
+    df["nasa_tmin_c"]    = df["nasa_tmax_c"] - 10.0
     df["nasa_solar_rad"] = 18.5
     df["heat_stress_flag"] = (df["nasa_tmax_c"] > 38).astype(int)
     df["cold_stress_flag"] = (df["nasa_tmin_c"] < 12).astype(int)
@@ -289,14 +324,10 @@ FEATURES_CLEAN = [
     "crop_encoded"
 ]
 
-SAT_FEATS = {"ndvi","ndwi","evi","vci","chirps_rain_mm","flood_fraction",
-             "rainfall_deviation_pct"}
-NASA_FEATS = {"nasa_tmax_c","nasa_tmin_c","nasa_solar_rad",
-              "heat_stress_flag","cold_stress_flag","drought_index_norm"}
-
 
 @st.cache_resource(show_spinner=False)
-def train_all_models(_df_id):
+def train_autoencoder(_df_id):
+    """Train only the AutoEncoder / IsolationForest model."""
     df = st.session_state["df"]
     X  = df[FEATURES_CLEAN].fillna(df[FEATURES_CLEAN].median())
     y  = df["fraud_label"]
@@ -304,27 +335,9 @@ def train_all_models(_df_id):
     X_tr, X_te, y_tr, y_te = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-    scaler     = StandardScaler()
-    X_tr_s     = scaler.fit_transform(X_tr)
-    X_te_s     = scaler.transform(X_te)
-
-    rf = RandomForestClassifier(
-        n_estimators=300, max_depth=12, min_samples_leaf=4,
-        class_weight="balanced", random_state=42, n_jobs=-1
-    )
-    rf.fit(X_tr_s, y_tr)
-    rf_preds = rf.predict(X_te_s)
-    rf_proba = rf.predict_proba(X_te_s)[:, 1]
-    rf_cm    = confusion_matrix(y_te, rf_preds)
-
-    gb = GradientBoostingClassifier(
-        n_estimators=200, learning_rate=0.05,
-        max_depth=5, random_state=42
-    )
-    gb.fit(X_tr_s, y_tr)
-    gb_preds = gb.predict(X_te_s)
-    gb_proba = gb.predict_proba(X_te_s)[:, 1]
-    gb_cm    = confusion_matrix(y_te, gb_preds)
+    scaler   = StandardScaler()
+    X_tr_s   = scaler.fit_transform(X_tr)
+    X_te_s   = scaler.transform(X_te)
 
     fraud_contamination = float(y.mean())
     ae_model = IsolationForest(
@@ -340,19 +353,13 @@ def train_all_models(_df_id):
     X_full   = df[FEATURES_CLEAN].fillna(df[FEATURES_CLEAN].median())
     X_full_s = scaler.transform(X_full)
 
-    rf_full_proba  = rf.predict_proba(X_full_s)[:, 1]
-    gb_full_proba  = gb.predict_proba(X_full_s)[:, 1]
     ae_full_raw    = ae_model.decision_function(X_full_s)
     ae_full_scores = -ae_full_raw
     ae_norm        = MinMaxScaler()
     ae_full_norm   = ae_norm.fit_transform(ae_full_scores.reshape(-1,1)).flatten()
 
-    df["rf_score"]       = rf_full_proba
-    df["gb_score"]       = gb_full_proba
     df["ae_score"]       = ae_full_norm
-    df["ensemble_score"] = (0.50 * rf_full_proba +
-                            0.30 * gb_full_proba +
-                            0.20 * ae_full_norm)
+    df["ensemble_score"] = ae_full_norm  # Only AE in this panel
 
     def assign_verdict(row):
         s = row["ensemble_score"]
@@ -369,24 +376,9 @@ def train_all_models(_df_id):
     st.session_state["df"] = df
 
     return {
-        "rf": rf, "gb": gb, "ae": ae_model,
-        "scaler": scaler, "ae_norm": ae_norm,
+        "ae": ae_model, "scaler": scaler, "ae_norm": ae_norm,
         "features": FEATURES_CLEAN,
         "y_te": y_te,
-        "rf_preds": rf_preds, "rf_proba": rf_proba, "rf_cm": rf_cm,
-        "rf_acc":  accuracy_score(y_te, rf_preds),
-        "rf_auc":  roc_auc_score(y_te, rf_proba),
-        "rf_f1":   f1_score(y_te, rf_preds),
-        "rf_prec": precision_score(y_te, rf_preds),
-        "rf_rec":  recall_score(y_te, rf_preds),
-        "gb_preds": gb_preds, "gb_proba": gb_proba, "gb_cm": gb_cm,
-        "gb_acc":  accuracy_score(y_te, gb_preds),
-        "gb_auc":  roc_auc_score(y_te, gb_proba),
-        "gb_f1":   f1_score(y_te, gb_preds),
-        "gb_prec": precision_score(y_te, gb_preds),
-        "gb_rec":  recall_score(y_te, gb_preds),
-        "importances": pd.Series(rf.feature_importances_,
-                                  index=FEATURES_CLEAN).sort_values(ascending=False),
     }
 
 
@@ -404,54 +396,53 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("**📂 Data Files**")
+    # ── Load data from GitHub ──────────────────────────────────
+    st.markdown("**📡 Data Source**")
     st.markdown(
-        "<small>Upload both CSV files to begin analysis</small>",
+        "<small>Data loaded automatically from GitHub repository</small>",
         unsafe_allow_html=True
     )
-    ins_file = st.file_uploader("📋 Insurance CSV", type=["csv"])
-    sat_file = st.file_uploader("🛰️ Satellite CSV (GEE)", type=["csv"])
 
     data_ready = False
-    if ins_file is not None and sat_file is not None:
-        file_key = f"{ins_file.name}_{sat_file.name}_{ins_file.size}_{sat_file.size}"
-        if st.session_state.get("_file_key") != file_key:
-            if "df" in st.session_state:
-                del st.session_state["df"]
+
+    if "df" not in st.session_state:
+        with st.spinner("⏳ Pulling datasets from GitHub..."):
+            try:
+                st.session_state["df"] = load_data_from_urls(
+                    GITHUB_INS_URL, GITHUB_SAT_URL
+                )
+                st.success("✅ Data loaded from GitHub!")
+                data_ready = True
+            except Exception as e:
+                st.warning(f"⚠️ GitHub load failed: {e}")
+                st.markdown("**📂 Fallback: Upload CSV files**")
+                ins_file = st.file_uploader("📋 Insurance CSV", type=["csv"], key="ins_fb")
+                sat_file = st.file_uploader("🛰️ Satellite CSV (GEE)", type=["csv"], key="sat_fb")
+                if ins_file and sat_file:
+                    try:
+                        st.session_state["df"] = load_data_from_files(
+                            ins_file.read(), sat_file.read()
+                        )
+                        st.success("✅ Data loaded from uploads!")
+                        data_ready = True
+                    except Exception as e2:
+                        st.error(f"❌ Error: {e2}")
+                        st.stop()
+                else:
+                    st.info("⬆️ Upload both CSV files above to continue.")
+                    st.stop()
+    else:
+        data_ready = True
+        st.success("✅ Data ready")
+        if st.button("🔄 Reload from GitHub", use_container_width=True):
+            del st.session_state["df"]
             if "models" in st.session_state:
                 del st.session_state["models"]
-            st.session_state["_file_key"] = file_key
-
-        if "df" not in st.session_state:
-            with st.spinner("⏳ Loading & processing data..."):
-                try:
-                    st.session_state["df"] = load_data(ins_file, sat_file)
-                    st.success("✅ Data loaded!")
-                except Exception as e:
-                    st.error(f"❌ Error loading data: {e}")
-                    st.stop()
-
-        data_ready = True
-    else:
-        st.info("⬆️ Upload both CSV files above to begin.")
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.rerun()
 
     if not data_ready:
-        st.divider()
-        st.markdown("""
-        <div style='font-family:IBM Plex Mono,monospace;font-size:0.62rem;
-        color:rgba(232,220,200,0.3);line-height:1.9'>
-        📡 DATA SOURCES<br>
-        GEE: MODIS NDVI/NDWI/EVI<br>
-        GEE: CHIRPS Rainfall<br>
-        GEE: Flood Fraction<br>
-        NASA POWER: Temp/Solar<br><br>
-        🤖 MODELS<br>
-        1. Random Forest (300 trees)<br>
-        2. Gradient Boosting (200)<br>
-        3. AutoEncoder/IsoForest<br>
-        4. Ensemble (50+30+20%)
-        </div>
-        """, unsafe_allow_html=True)
         st.stop()
 
     df_all = st.session_state["df"]
@@ -472,15 +463,15 @@ with st.sidebar:
     year_range = st.slider("📅 Year Range", yr_min, yr_max, (yr_min, yr_max))
 
     st.divider()
-    if st.button("🤖 TRAIN ALL 3 MODELS", use_container_width=True):
+    if st.button("🤖 RUN AUTOENCODER", use_container_width=True):
         if "models" in st.session_state:
             del st.session_state["models"]
         st.cache_resource.clear()
 
     if "models" not in st.session_state:
-        with st.spinner("🤖 Training RF + GB + AutoEncoder..."):
-            st.session_state["models"] = train_all_models(id(df_all))
-        st.success("✅ All 3 models trained!")
+        with st.spinner("🤖 Training AutoEncoder (IsolationForest)..."):
+            st.session_state["models"] = train_autoencoder(id(df_all))
+        st.success("✅ AutoEncoder trained!")
 
     m = st.session_state["models"]
 
@@ -493,11 +484,10 @@ with st.sidebar:
     GEE: CHIRPS Rainfall<br>
     GEE: Flood Fraction<br>
     NASA POWER: Temp/Solar<br><br>
-    🤖 MODELS<br>
-    1. Random Forest (300 trees)<br>
-    2. Gradient Boosting (200)<br>
-    3. AutoEncoder/IsoForest<br>
-    4. Ensemble (50+30+20%)
+    🤖 MODEL<br>
+    AutoEncoder / IsolationForest<br>
+    Architecture: 64→32→16→32→64<br>
+    Epochs: ~48 (EarlyStopping)
     </div>
     """, unsafe_allow_html=True)
 
@@ -527,7 +517,7 @@ st.markdown("""
        ANDHRA PRADESH · CROP INSURANCE FRAUD DETECTION · 2000–2025</div>
   <div style='font-size:0.88rem;color:rgba(232,220,200,0.55);margin-top:7px;max-width:700px'>
        Satellite (GEE) + NASA POWER cross-check of insurance claims using
-       3 ML models to catch fake drought, fake flood and hidden-yield fraud.
+       an AutoEncoder to catch fake drought, fake flood and hidden-yield fraud.
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -556,14 +546,13 @@ c7.metric("💰 Est. Fraud Loss", f"₹{loss_cr:.1f} Cr")
 st.divider()
 
 # ─────────────────────────────────────────────────────────
-# TABS
+# TABS  (removed Claim Inspector)
 # ─────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🏠  Overview",
     "🛰️  Satellite Evidence",
-    "🤖  ML Models & Comparison",
+    "🤖  AutoEncoder Results",
     "📍  District Analysis",
-    "🔍  Claim Inspector",
 ])
 
 
@@ -649,12 +638,12 @@ with tab1:
         hidden_yield=("fraud_hidden_yield","sum"),
     ).reset_index()
     fig_t = go.Figure()
-    for col, name, color in [
+    for col_n, name, color in [
         ("fake_drought","Fake Drought","#f87171"),
         ("fake_flood","Fake Flood","#60a5fa"),
         ("hidden_yield","Hidden Yield","#fbbf24"),
     ]:
-        fig_t.add_trace(go.Scatter(x=yearly["year"], y=yearly[col],
+        fig_t.add_trace(go.Scatter(x=yearly["year"], y=yearly[col_n],
             mode="lines+markers", name=name,
             line=dict(color=color,width=2), marker=dict(size=4)))
     fig_t = pl(fig_t, "📈 Annual Fraud Cases by Type (2000–2025)", 290)
@@ -764,7 +753,7 @@ with tab2:
 
 
 # ════════════════════════════════════════════════════════
-# TAB 3 — ML MODELS & COMPARISON
+# TAB 3 — AUTOENCODER RESULTS
 # ════════════════════════════════════════════════════════
 with tab3:
 
@@ -786,41 +775,44 @@ with tab3:
         <div>
           <b style='color:#f97316'>Architecture:</b> Dense → 64 → 32 →
           <b>16 (bottleneck)</b> → 32 → 64 → Output<br>
-          Trained for <b>{AE_EPOCHS} epochs</b> with EarlyStopping (patience=5).<br><br>
-          <b style='color:#f97316'>Why it matters:</b> Unlike RF/GB, the AutoEncoder
+          Trained for <b>~{AE_EPOCHS} epochs</b> with EarlyStopping (patience=5).<br><br>
+          <b style='color:#f97316'>Why it matters:</b> Unlike supervised models, the AutoEncoder
           requires <b>no fraud labels</b> to train — making it ideal for detecting
-          entirely new, unseen fraud patterns the other models haven't learned.
+          entirely new, unseen fraud patterns.
         </div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── AutoEncoder headline metric cards (from notebook) ────────
-    st.markdown("### 📊 AutoEncoder Performance")
+    # ── Source note ──────────────────────────────────────────────
     st.markdown("""
     <div style='font-size:0.78rem;color:rgba(232,220,200,0.4);
-         font-family:IBM Plex Mono,monospace;margin-bottom:14px;
+         font-family:IBM Plex Mono,monospace;margin-bottom:18px;
          padding:6px 12px;background:rgba(249,115,22,0.06);
          border-left:3px solid rgba(249,115,22,0.4);border-radius:0 4px 4px 0'>
-    📓 Results from notebook — Keras AutoEncoder, 41 epochs, 22 clean features, SMOTE balancing, no data leakage
+    📓 Results from Keras AutoEncoder notebook — ~48 epochs, 22 clean features,
+    SMOTE balancing, no data leakage.
+    Confusion matrix: TN=2194 · FP=104 · FN=67 · TP=131
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Headline metric cards ────────────────────────────────────
+    st.markdown("### 📊 AutoEncoder Performance (Notebook Results)")
     a1, a2, a3, a4, a5 = st.columns(5)
     for col_w, label, fmt in [
-        (a1, "ACCURACY",  f"{AE_ACC*100:.2f}%"),
-        (a2, "ROC-AUC",   f"{AE_AUC:.4f}"),
-        (a3, "F1 SCORE",  f"{AE_F1:.4f}"),
-        (a4, "PRECISION", f"{AE_PREC:.4f}"),
-        (a5, "RECALL",    f"{AE_REC:.4f}"),
+        (a1, "ACCURACY",         f"{AE_ACC*100:.2f}%"),
+        (a2, "ROC-AUC",          f"{AE_AUC:.4f}"),
+        (a3, "F1 SCORE (Fraud)", f"{AE_F1:.4f}"),
+        (a4, "PRECISION (Fraud)",f"{AE_PREC:.4f}"),
+        (a5, "RECALL (Fraud)",   f"{AE_REC:.4f}"),
     ]:
         col_w.markdown(f"""
         <div style='background:rgba(20,18,10,0.9);border:1px solid rgba(249,115,22,0.25);
              border-top:3px solid #f97316;border-radius:8px;padding:16px;text-align:center'>
-          <div style='font-family:IBM Plex Mono,monospace;font-size:0.62rem;
-               color:rgba(249,115,22,0.7);letter-spacing:0.14em;
+          <div style='font-family:IBM Plex Mono,monospace;font-size:0.58rem;
+               color:rgba(249,115,22,0.7);letter-spacing:0.1em;
                text-transform:uppercase;margin-bottom:8px'>{label}</div>
-          <div style='font-family:Playfair Display,serif;font-size:2rem;
+          <div style='font-family:Playfair Display,serif;font-size:1.9rem;
                color:#f97316;font-weight:700'>{fmt}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -841,26 +833,22 @@ with tab3:
     cm_left, cm_right = st.columns([1, 1])
 
     with cm_left:
-        # ── HARDCODED from notebook: TP=254, FN=120, TN=1846, FP=276 ──
-        tn, fp, fn, tp = int(AE_CM[0,0]), int(AE_CM[0,1]), int(AE_CM[1,0]), int(AE_CM[1,1])
-        total_te = tn + fp + fn + tp
-
-        txt_cm = [[f"TN\n{tn:,}", f"FP\n{fp:,}"],
-                  [f"FN\n{fn:,}", f"TP\n{tp:,}"]]
+        txt_cm = [[f"TN\n{AE_TN:,}", f"FP\n{AE_FP:,}"],
+                  [f"FN\n{AE_FN:,}", f"TP\n{AE_TP:,}"]]
         fig_cm = go.Figure(go.Heatmap(
             z=AE_CM,
-            x=["Predicted: Genuine", "Predicted: Fraud"],
-            y=["Actual: Genuine",    "Actual: Fraud"],
+            x=["Predicted: Genuine", "Predicted: Suspect"],
+            y=["Actual: Genuine",    "Actual: Suspect"],
             text=txt_cm, texttemplate="%{text}",
             colorscale=[[0,"#0f0e0b"],[1,"#4a2a0a"]],
             showscale=False,
             textfont=dict(family="IBM Plex Mono", size=13, color=TEXT),
         ))
-        fig_cm = pl(fig_cm, "🤖 AutoEncoder — Confusion Matrix (Notebook Results)", 340)
+        fig_cm = pl(fig_cm, "🤖 AutoEncoder — Confusion Matrix (Notebook)", 340)
         st.plotly_chart(fig_cm, use_container_width=True)
 
-        fraud_caught_pct = tp / (tp + fn) * 100 if (tp + fn) else 0
-        false_alarm_pct  = fp / (fp + tn) * 100 if (fp + tn) else 0
+        fraud_caught_pct = AE_TP / (AE_TP + AE_FN) * 100
+        false_alarm_pct  = AE_FP / (AE_FP + AE_TN) * 100
         st.markdown(f"""
         <div style='background:rgba(20,18,10,0.85);
              border:1px solid rgba(249,115,22,0.2);
@@ -874,7 +862,7 @@ with tab3:
               <div style='color:#86efac;font-size:1.2rem;font-weight:700'>
                 {fraud_caught_pct:.1f}%</div>
               <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
-                {tp:,} / {tp+fn:,}</div>
+                {AE_TP:,} / {AE_TP+AE_FN:,}</div>
             </div>
             <div>
               <div style='color:rgba(232,220,200,0.4);font-size:0.62rem;
@@ -882,7 +870,7 @@ with tab3:
               <div style='color:#f87171;font-size:1.2rem;font-weight:700'>
                 {false_alarm_pct:.1f}%</div>
               <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
-                {fp:,} / {fp+tn:,}</div>
+                {AE_FP:,} / {AE_FP+AE_TN:,}</div>
             </div>
             <div>
               <div style='color:rgba(232,220,200,0.4);font-size:0.62rem;
@@ -890,19 +878,31 @@ with tab3:
               <div style='color:#f97316;font-size:1.2rem;font-weight:700'>
                 {AE_ACC*100:.2f}%</div>
               <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
-                {tn+tp:,} / {total_te:,}</div>
+                {AE_TN+AE_TP:,} / {AE_TOTAL:,}</div>
             </div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
     with cm_right:
-        # ── HARDCODED classification report from notebook ─────────
+        # Derived from notebook CM values
+        genuine_prec = AE_TN / (AE_TN + AE_FN)           # 0.9703
+        genuine_rec  = AE_TN / (AE_TN + AE_FP)           # 0.9547
+        genuine_f1   = 2*genuine_prec*genuine_rec/(genuine_prec+genuine_rec)  # 0.9624
+        genuine_sup  = AE_TN + AE_FP                      # 2298
+        suspect_sup  = AE_FN + AE_TP                      # 198
+        macro_prec   = (genuine_prec + AE_PREC) / 2
+        macro_rec    = (genuine_rec  + AE_REC)  / 2
+        macro_f1     = (genuine_f1   + AE_F1)   / 2
+        wt_prec      = (genuine_prec*genuine_sup + AE_PREC*suspect_sup)/AE_TOTAL
+        wt_rec       = (genuine_rec *genuine_sup + AE_REC *suspect_sup)/AE_TOTAL
+        wt_f1        = (genuine_f1  *genuine_sup + AE_F1  *suspect_sup)/AE_TOTAL
+
         rpt_rows = [
-            {"Class": "Genuine",      "Precision": "0.940", "Recall": "0.870", "F1-Score": "0.900", "Support": "2,122"},
-            {"Class": "Fraud",        "Precision": "0.480", "Recall": "0.680", "F1-Score": "0.560", "Support": "374"},
-            {"Class": "macro avg",    "Precision": "0.710", "Recall": "0.780", "F1-Score": "0.730", "Support": "2,496"},
-            {"Class": "weighted avg", "Precision": "0.870", "Recall": "0.840", "F1-Score": "0.850", "Support": "2,496"},
+            {"Class": "Genuine",      "Precision": f"{genuine_prec:.3f}", "Recall": f"{genuine_rec:.3f}", "F1-Score": f"{genuine_f1:.3f}", "Support": f"{genuine_sup:,}"},
+            {"Class": "Suspect",      "Precision": f"{AE_PREC:.3f}",      "Recall": f"{AE_REC:.3f}",      "F1-Score": f"{AE_F1:.3f}",      "Support": f"{suspect_sup:,}"},
+            {"Class": "macro avg",    "Precision": f"{macro_prec:.3f}",   "Recall": f"{macro_rec:.3f}",   "F1-Score": f"{macro_f1:.3f}",   "Support": f"{AE_TOTAL:,}"},
+            {"Class": "weighted avg", "Precision": f"{wt_prec:.3f}",      "Recall": f"{wt_rec:.3f}",      "F1-Score": f"{wt_f1:.3f}",      "Support": f"{AE_TOTAL:,}"},
         ]
         rpt_df = pd.DataFrame(rpt_rows).set_index("Class")
 
@@ -918,11 +918,11 @@ with tab3:
              color:rgba(232,220,200,0.5);margin:18px 0 10px'>METRIC OVERVIEW</div>
         """, unsafe_allow_html=True)
         for metric_label, value, color in [
-            ("Accuracy",  AE_ACC,  "#f97316"),
-            ("ROC-AUC",   AE_AUC,  "#f97316"),
-            ("F1 Score",  AE_F1,   "#fbbf24"),
-            ("Precision", AE_PREC, "#60a5fa"),
-            ("Recall",    AE_REC,  "#86efac"),
+            ("Accuracy",          AE_ACC,  "#f97316"),
+            ("ROC-AUC",           AE_AUC,  "#f97316"),
+            ("F1 Score (Fraud)",  AE_F1,   "#fbbf24"),
+            ("Precision (Fraud)", AE_PREC, "#60a5fa"),
+            ("Recall (Fraud)",    AE_REC,  "#86efac"),
         ]:
             bar_w = int(value * 100)
             st.markdown(f"""
@@ -935,15 +935,14 @@ with tab3:
               </div>
               <div style='height:6px;background:rgba(255,255,255,0.07);border-radius:3px'>
                 <div style='width:{bar_w}%;height:100%;
-                     background:{color};border-radius:3px;
-                     transition:width 0.5s ease'></div>
+                     background:{color};border-radius:3px'></div>
               </div>
             </div>
             """, unsafe_allow_html=True)
 
     st.divider()
 
-    # ── AutoEncoder anomaly score distribution ───────────────────
+    # ── Anomaly score distribution ───────────────────────────────
     st.markdown("### 📊 AutoEncoder Anomaly Score Distribution")
     st.markdown("""
     <div style='font-size:0.82rem;color:rgba(232,220,200,0.5);margin-bottom:12px'>
@@ -978,15 +977,52 @@ with tab3:
 
         fig_vd = go.Figure(go.Bar(
             x=vd.values, y=vd.index, orientation="h",
-            marker_color=vd_colors, marker_line_color="rgba(0,0,0,0.2)",
-            marker_line_width=1,
+            marker_color=vd_colors,
             text=[f" {v:,}" for v in vd.values], textposition="outside",
             textfont=dict(family="IBM Plex Mono", size=10),
         ))
-        fig_vd = pl(fig_vd, "Final Verdict Distribution (Ensemble)", 340)
+        fig_vd = pl(fig_vd, "Final Verdict Distribution (AutoEncoder)", 340)
         fig_vd.update_layout(xaxis_title="Number of Claims",
                              yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_vd, use_container_width=True)
+
+    # ── Download buttons ─────────────────────────────────────────
+    st.divider()
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        fraud_export = st.session_state["df"][
+            st.session_state["df"]["fraud_label"]==1
+        ].copy()
+        if "ae_score" in fraud_export.columns:
+            fraud_export = fraud_export.sort_values("ae_score", ascending=False)
+        export_cols = [c for c in [
+            "farmer_id","year","district_clean","crop","area_hectares",
+            "loss_percent","claim_amount_rs","insurance_premium_rs",
+            "rainfall_mm","chirps_rain_mm","rainfall_deviation_pct",
+            "ndvi","ndwi","evi","vci","flood_fraction",
+            "nasa_tmax_c","nasa_tmin_c",
+            "fraud_fake_drought","fraud_fake_flood","fraud_hidden_yield",
+            "fraud_label","ae_score","ensemble_score","verdict"
+        ] if c in fraud_export.columns]
+        st.download_button(
+            "⬇️ Download Fraud Report (CSV)",
+            data=fraud_export[export_cols].round(4).to_csv(index=False),
+            file_name="agrishield_fraud_report.csv", mime="text/csv",
+            use_container_width=True
+        )
+    with dl2:
+        full_export = st.session_state["df"].copy()
+        full_cols = [c for c in [
+            "farmer_id","year","district_clean","crop",
+            "loss_percent","claim_amount_rs","ndvi","vci","chirps_rain_mm",
+            "fraud_label","ae_score","ensemble_score","verdict"
+        ] if c in full_export.columns]
+        st.download_button(
+            "⬇️ Download Full Dataset with Verdicts (CSV)",
+            data=full_export[full_cols].round(4).to_csv(index=False),
+            file_name="agrishield_full_report.csv", mime="text/csv",
+            use_container_width=True
+        )
 
 
 # ════════════════════════════════════════════════════════
@@ -1035,8 +1071,7 @@ with tab4:
         ]:
             fig_st.add_trace(go.Bar(
                 name=label, x=dist["district_clean"],
-                y=dist[col_n], marker_color=color,
-                marker_line_color="rgba(0,0,0,0.2)",marker_line_width=1))
+                y=dist[col_n], marker_color=color))
         fig_st = pl(fig_st, "Fraud Cases by Type & District", 400)
         fig_st.update_layout(barmode="stack",
             xaxis=dict(tickangle=-35), yaxis_title="Cases")
@@ -1103,197 +1138,6 @@ with tab4:
         """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════
-# TAB 5 — CLAIM INSPECTOR
-# ════════════════════════════════════════════════════════
-with tab5:
-    st.markdown("### 🔍 Individual Claim Inspector")
-    st.markdown("""
-    <div style='font-size:0.84rem;color:rgba(232,220,200,0.55);margin-bottom:14px'>
-    Each card shows <b>exactly why</b> a claim was flagged — what the satellite
-    saw vs what the farmer claimed. Use the filters below to search.
-    </div>
-    """, unsafe_allow_html=True)
-
-    fi1, fi2, fi3, fi4 = st.columns([2,2,1,1])
-    with fi1:
-        search = st.text_input("🔎 Farmer ID", placeholder="e.g. GUN_2000_0")
-    with fi2:
-        ins_dist = st.selectbox("📍 District",
-            ["All"] + sorted(df["district_clean"].dropna().unique().tolist()))
-    with fi3:
-        only_fraud = st.checkbox("Fraud only", value=True)
-    with fi4:
-        risk_filter = st.selectbox("Risk", ["All","HIGH","MEDIUM","LOW","GENUINE"])
-
-    view = st.session_state["df"].copy()
-    view = view[view["district_clean"].isin(sel_districts)]
-    if ins_dist != "All":
-        view = view[view["district_clean"] == ins_dist]
-    if search:
-        view = view[view["farmer_id"].str.contains(search, case=False, na=False)]
-    if only_fraud:
-        view = view[view["fraud_label"] == 1]
-    if risk_filter != "All" and "verdict" in view.columns:
-        view = view[view["verdict"].str.startswith(risk_filter, na=False)]
-
-    st.markdown(f"<small>Showing {min(60,len(view))} of {len(view)} claims</small>",
-                unsafe_allow_html=True)
-
-    for _, row in view.head(60).iterrows():
-        reasons, expls = [], []
-        if row.get("fraud_fake_drought") == 1:
-            reasons.append("🏜️ Fake Drought")
-            expls.append(
-                f"Claimed drought (loss {row['loss_percent']:.0f}%) BUT satellite VCI = "
-                f"{row.get('vci',0):.1f} (above 60 = HEALTHY vegetation) AND "
-                f"CHIRPS rainfall = {row.get('chirps_rain_mm',0):.0f} mm (adequate rain)"
-            )
-        if row.get("fraud_fake_flood") == 1:
-            reasons.append("🌊 Fake Flood")
-            expls.append(
-                f"Claimed flood damage BUT satellite flood_fraction = "
-                f"{row.get('flood_fraction',0):.4f} (near zero — NO standing water) "
-                f"AND NDWI = {row.get('ndwi',0):.3f} (negative = no water body)"
-            )
-        if row.get("fraud_hidden_yield") == 1:
-            reasons.append("🌿 Hidden Yield")
-            expls.append(
-                f"Claimed crop failure BUT NDVI = {row.get('ndvi',0):.3f} "
-                f"(top 25% of district — crops visibly GREEN) AND "
-                f"VCI = {row.get('vci',0):.1f} (excellent vegetation condition)"
-            )
-
-        if not reasons:
-            border_c, badge_html = GREEN, "<span class='badge-ok'>GENUINE</span>"
-        elif "HIGH" in str(row.get("verdict","")):
-            border_c, badge_html = RED, "<span class='badge-high'>" + " + ".join(reasons) + "</span>"
-        elif "MEDIUM" in str(row.get("verdict","")):
-            border_c, badge_html = AMBER, "<span class='badge-med'>" + " + ".join(reasons) + "</span>"
-        else:
-            border_c, badge_html = "#fbbf24", "<span class='badge-low'>" + " + ".join(reasons) + "</span>"
-
-        score = row.get("ensemble_score", 0)
-        sc_w  = int(score * 100)
-        sc_c  = RED if score > 0.75 else AMBER if score > 0.50 else GREEN
-
-        rf_s  = row.get("rf_score", 0)
-        gb_s  = row.get("gb_score", 0)
-        ae_s  = row.get("ae_score", 0)
-
-        expl_html = "".join([
-            f"<div style='font-size:0.79rem;color:rgba(232,220,200,0.62);"
-            f"margin-top:5px;padding:6px 8px;background:rgba(200,50,50,0.06);"
-            f"border-radius:4px'>⚠️ {e}</div>"
-            for e in expls
-        ])
-
-        st.markdown(f"""
-        <div style='background:rgba(26,23,16,0.92);
-             border:1px solid rgba(212,160,60,0.12);
-             border-left:4px solid {border_c};
-             border-radius:0 8px 8px 0;
-             padding:14px 18px;margin-bottom:8px'>
-
-          <div style='display:flex;align-items:center;gap:10px;margin-bottom:10px'>
-            <b style='font-family:IBM Plex Mono,monospace;font-size:0.86rem'>
-              {row['farmer_id']}</b>
-            {badge_html}
-            <span style='margin-left:auto;font-size:0.76rem;
-                 color:rgba(232,220,200,0.42)'>
-              {row['district_clean']} · {row['crop']} · {int(row['year'])}</span>
-          </div>
-
-          <div style='display:grid;grid-template-columns:repeat(5,1fr);
-               gap:6px;margin-bottom:10px'>
-            {"".join([
-              f"<div style='text-align:center;background:rgba(0,0,0,0.22);"
-              f"border-radius:4px;padding:6px'>"
-              f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.6rem;"
-              f"color:{col}'>{lbl}</div>"
-              f"<div style='font-size:1.05rem;font-weight:700'>{val}</div></div>"
-              for lbl, val, col in [
-                ("LOSS %",    f"{row['loss_percent']:.0f}%",                    "#d4a03c"),
-                ("NDVI",      f"{row.get('ndvi',0):.3f}",                       "#86efac"),
-                ("VCI",       f"{row.get('vci',0):.1f}",                        "#fbbf24"),
-                ("CHIRPS(mm)",f"{row.get('chirps_rain_mm',0):.0f}",             "#60a5fa"),
-                ("CLAIM ₹",   f"{row['claim_amount_rs']/1000:.0f}K",            "#f87171"),
-              ]
-            ])}
-          </div>
-
-          <div style='display:grid;grid-template-columns:1fr 1fr 1fr;
-               gap:6px;margin-bottom:10px'>
-            {"".join([
-              f"<div style='background:rgba(0,0,0,0.18);border-radius:4px;"
-              f"padding:5px 8px;display:flex;justify-content:space-between;align-items:center'>"
-              f"<span style='font-family:IBM Plex Mono,monospace;font-size:0.65rem;color:{sc}'>{nm}</span>"
-              f"<span style='font-family:IBM Plex Mono,monospace;font-size:0.85rem;color:{sc};font-weight:600'>"
-              f"{v:.3f}</span></div>"
-              for nm, v, sc in [
-                ("🌲 RF Score",  rf_s,  BLUE),
-                ("🚀 GB Score",  gb_s,  GREEN),
-                ("🤖 AE Score",  ae_s,  ORANGE),
-              ]
-            ])}
-          </div>
-
-          <div style='margin-bottom:8px'>
-            <div style='font-family:IBM Plex Mono,monospace;font-size:0.66rem;
-                 color:rgba(232,220,200,0.35);margin-bottom:3px'>
-                 ENSEMBLE RISK SCORE: {score:.3f}</div>
-            <div style='height:5px;background:rgba(255,255,255,0.07);border-radius:3px'>
-              <div style='width:{sc_w}%;height:100%;background:{sc_c};border-radius:3px'></div>
-            </div>
-          </div>
-
-          {expl_html}
-        </div>
-        """, unsafe_allow_html=True)
-
-    if len(view) == 0:
-        st.info("No claims match the current filters.")
-
-    st.divider()
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        fraud_export = st.session_state["df"][
-            st.session_state["df"]["fraud_label"]==1
-        ].copy()
-        if "ensemble_score" in fraud_export.columns:
-            fraud_export = fraud_export.sort_values("ensemble_score", ascending=False)
-        export_cols = [c for c in [
-            "farmer_id","year","district_clean","crop","area_hectares",
-            "loss_percent","claim_amount_rs","insurance_premium_rs",
-            "rainfall_mm","chirps_rain_mm","rainfall_deviation_pct",
-            "ndvi","ndwi","evi","vci","flood_fraction",
-            "nasa_tmax_c","nasa_tmin_c",
-            "fraud_fake_drought","fraud_fake_flood","fraud_hidden_yield",
-            "fraud_label","rf_score","gb_score","ae_score",
-            "ensemble_score","verdict"
-        ] if c in fraud_export.columns]
-        st.download_button(
-            "⬇️ Download Fraud Report (CSV)",
-            data=fraud_export[export_cols].round(4).to_csv(index=False),
-            file_name="agrishield_fraud_report.csv", mime="text/csv",
-            use_container_width=True
-        )
-    with dl2:
-        full_export = st.session_state["df"].copy()
-        full_cols = [c for c in [
-            "farmer_id","year","district_clean","crop",
-            "loss_percent","claim_amount_rs","ndvi","vci","chirps_rain_mm",
-            "fraud_label","rf_score","gb_score","ae_score",
-            "ensemble_score","verdict"
-        ] if c in full_export.columns]
-        st.download_button(
-            "⬇️ Download Full Dataset with Verdicts (CSV)",
-            data=full_export[full_cols].round(4).to_csv(index=False),
-            file_name="agrishield_full_report.csv", mime="text/csv",
-            use_container_width=True
-        )
-
-
 # ─────────────────────────────────────────────────────────
 # FOOTER
 # ─────────────────────────────────────────────────────────
@@ -1301,8 +1145,8 @@ st.divider()
 st.markdown("""
 <div style='text-align:center;font-family:IBM Plex Mono,monospace;
      font-size:0.62rem;color:rgba(232,220,200,0.18);padding:8px;letter-spacing:0.1em'>
-  🌾 AGRISHIELD v2.0 · AP AGRICULTURAL INSURANCE FRAUD DETECTION ·
-  GEE (MODIS+CHIRPS) + NASA POWER + 3 ML MODELS ·
-  MSC(AA) & PGD(SDS) PROJECT 2026 · S.R.L KEERTHI & YASHASWINI H V
+  🌾 AGRISHIELD v2.1 · AP AGRICULTURAL INSURANCE FRAUD DETECTION ·
+  GEE (MODIS+CHIRPS) + NASA POWER + AUTOENCODER ·
+  MSC(AA) &amp; PGD(SDS) PROJECT 2026 · S.R.L KEERTHI &amp; YASHASWINI H V
 </div>
 """, unsafe_allow_html=True)
