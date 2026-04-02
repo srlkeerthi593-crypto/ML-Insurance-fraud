@@ -718,25 +718,48 @@ with tab2:
         st.markdown("<small>Fraud claims cluster near 0 — farmer over-reported rainfall while CHIRPS shows it was normal</small>",
                     unsafe_allow_html=True)
 
-    bx1, bx2, bx3 = st.columns(3)
-    for col_w, idx_col, title, col_f, note in [
-        (bx1,"ndvi","NDVI — Genuine vs Fraud","#f87171",
-         "High NDVI with damage claim = hidden good yield"),
-        (bx2,"vci", "VCI — Genuine vs Fraud","#fbbf24",
-         "VCI>60 with drought claim = fake drought"),
-        (bx3,"chirps_rain_mm","CHIRPS Rain (mm) — Genuine vs Fraud","#60a5fa",
-         "High CHIRPS rain with drought claim = fake drought"),
+    # ── Key satellite stats table ─────────────────────────────
+    st.markdown("### 📊 Satellite Index Summary — Genuine vs Fraud")
+    stat_cols = st.columns(3)
+    for col_w, idx_col, label, color, note in [
+        (stat_cols[0], "ndvi",          "NDVI",           "#86efac",
+         "High NDVI + damage claim = Hidden Good Yield fraud"),
+        (stat_cols[1], "vci",           "VCI",            "#fbbf24",
+         "VCI > 60 + drought claim = Fake Drought fraud"),
+        (stat_cols[2], "chirps_rain_mm","CHIRPS Rain (mm)","#60a5fa",
+         "High CHIRPS rain + drought claim = Fake Drought fraud"),
     ]:
         g0 = df[df["fraud_label"]==0][idx_col].dropna()
         g1 = df[df["fraud_label"]==1][idx_col].dropna()
-        fig_bx = go.Figure()
-        fig_bx.add_trace(go.Box(y=g0,name="Genuine",marker_color=GREEN,
-                                 boxmean=True,line_width=1.5))
-        fig_bx.add_trace(go.Box(y=g1,name="Fraud",  marker_color=col_f,
-                                 boxmean=True,line_width=1.5))
-        fig_bx = pl(fig_bx, title, 300)
-        col_w.plotly_chart(fig_bx, use_container_width=True)
-        col_w.markdown(f"<small>{note}</small>", unsafe_allow_html=True)
+        col_w.markdown(f"""
+        <div style='background:rgba(26,23,16,0.85);border:1px solid {color}33;
+             border-top:3px solid {color};border-radius:8px;padding:16px;'>
+          <div style='font-family:IBM Plex Mono,monospace;font-size:0.68rem;
+               color:{color};letter-spacing:0.12em;text-transform:uppercase;
+               margin-bottom:12px'>{label}</div>
+          <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px'>
+            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:10px;text-align:center'>
+              <div style='font-size:0.6rem;color:rgba(232,220,200,0.4);
+                   font-family:IBM Plex Mono,monospace;margin-bottom:4px'>GENUINE — MEAN</div>
+              <div style='font-family:Playfair Display,serif;font-size:1.4rem;
+                   color:#4ade80'>{g0.mean():.3f}</div>
+              <div style='font-size:0.62rem;color:rgba(232,220,200,0.35);
+                   font-family:IBM Plex Mono,monospace'>median {g0.median():.3f}</div>
+            </div>
+            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:10px;text-align:center'>
+              <div style='font-size:0.6rem;color:rgba(232,220,200,0.4);
+                   font-family:IBM Plex Mono,monospace;margin-bottom:4px'>FRAUD — MEAN</div>
+              <div style='font-family:Playfair Display,serif;font-size:1.4rem;
+                   color:#f87171'>{g1.mean():.3f}</div>
+              <div style='font-size:0.62rem;color:rgba(232,220,200,0.35);
+                   font-family:IBM Plex Mono,monospace'>median {g1.median():.3f}</div>
+            </div>
+          </div>
+          <div style='margin-top:10px;font-size:0.72rem;
+               color:rgba(232,220,200,0.45);border-top:1px solid rgba(212,160,60,0.1);
+               padding-top:8px'>{note}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════
@@ -744,200 +767,135 @@ with tab2:
 # ════════════════════════════════════════════════════════
 with tab3:
 
+    # ── What is an AutoEncoder — explanation card ────────────────
     st.markdown("""
-    <div class='agri-card' style='margin-bottom:18px'>
+    <div class='agri-card' style='margin-bottom:22px'>
       <div style='font-family:Playfair Display,serif;font-size:1rem;
-           color:#d4a03c;margin-bottom:10px'>🤖 How the 3 Models Work</div>
-      <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;
-           font-size:0.82rem;color:rgba(232,220,200,0.72);'>
-        <div style='border-left:3px solid #60a5fa;padding-left:10px'>
-          <b style='color:#60a5fa'>Random Forest</b><br>
-          Builds 300 decision trees. Each tree learns different fraud patterns.
-          A claim is flagged if the majority of trees vote it suspicious.
-          <b>Best at: complex patterns across many features.</b>
+           color:#d4a03c;margin-bottom:10px'>🤖 AutoEncoder — How It Works</div>
+      <div style='display:grid;grid-template-columns:1fr 1fr;gap:20px;
+           font-size:0.83rem;color:rgba(232,220,200,0.72);line-height:1.8'>
+        <div>
+          <b style='color:#f97316'>What it learns:</b> The AutoEncoder is trained
+          <i>only on genuine (non-fraud) claims</i>. It learns to compress and
+          reconstruct normal claim patterns with very low error.<br><br>
+          <b style='color:#f97316'>How it detects fraud:</b> When shown a fraudulent
+          claim, the AutoEncoder cannot reconstruct it accurately — the
+          reconstruction error is high. Claims with high error are flagged as anomalies.
         </div>
-        <div style='border-left:3px solid #86efac;padding-left:10px'>
-          <b style='color:#86efac'>Gradient Boosting</b><br>
-          Trains trees sequentially — each new tree corrects the previous one's mistakes.
-          Very precise. <b>Best at: financial ratio anomalies and crop-specific patterns.</b>
-        </div>
-        <div style='border-left:3px solid #f97316;padding-left:10px'>
-          <b style='color:#f97316'>AutoEncoder (IsolationForest)</b><br>
-          Learns what a "normal/genuine" claim looks like, then flags anything
-          that looks different. Requires NO fraud labels to train.
-          <b>Best at: catching new unknown fraud patterns.</b>
+        <div>
+          <b style='color:#f97316'>Architecture:</b> Dense → 64 → 32 →
+          <b>16 (bottleneck)</b> → 32 → 64 → Output<br>
+          Trained for 41 epochs with early stopping (patience=7).<br><br>
+          <b style='color:#f97316'>Why it matters:</b> Unlike RF/GB, the AutoEncoder
+          requires <b>no fraud labels</b> to train — making it ideal for detecting
+          entirely new, unseen fraud patterns the other models haven't learned.
         </div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("### 📊 Individual Model Results")
-    mc1, mc2, mc3 = st.columns(3)
+    # ── AutoEncoder headline metric cards ────────────────────────
+    st.markdown("### 📊 AutoEncoder Performance")
 
-    for col_w, key, name, color, css_cls, desc in [
-        (mc1, "rf", "Random Forest",    BLUE,   "rf",
-         "Trained on: 80% of data | Class weights balanced | 300 trees, depth 12"),
-        (mc2, "gb", "Gradient Boosting", GREEN,  "gb",
-         "Trained on: 80% of data | Learning rate 0.05 | 200 boosting rounds"),
-        (mc3, "ae", "AutoEncoder",       ORANGE, "ae",
-         "Trained on: GENUINE claims only | IsolationForest | Detects anomalies"),
+    ae_acc  = m["ae_acc"]
+    ae_auc  = m["ae_auc"]
+    ae_f1   = m["ae_f1"]
+    ae_prec = m["ae_prec"]
+    ae_rec  = m["ae_rec"]
+
+    a1, a2, a3, a4, a5 = st.columns(5)
+    for col_w, label, value, fmt in [
+        (a1, "ACCURACY",  ae_acc*100, f"{ae_acc*100:.2f}%"),
+        (a2, "ROC-AUC",   ae_auc,     f"{ae_auc:.4f}"),
+        (a3, "F1 SCORE",  ae_f1,      f"{ae_f1:.4f}"),
+        (a4, "PRECISION", ae_prec,    f"{ae_prec:.4f}"),
+        (a5, "RECALL",    ae_rec,     f"{ae_rec:.4f}"),
     ]:
-        acc  = m[f"{key}_acc"]
-        auc  = m[f"{key}_auc"]
-        f1   = m[f"{key}_f1"]
-        prec = m[f"{key}_prec"]
-        rec  = m[f"{key}_rec"]
         col_w.markdown(f"""
-        <div class='model-card {css_cls}' style='margin-bottom:12px'>
-          <div style='font-family:IBM Plex Mono,monospace;font-size:0.68rem;
-               color:{color};letter-spacing:0.12em;text-transform:uppercase;
-               margin-bottom:8px'>{name}</div>
-
-          <div style='display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px'>
-            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:8px;text-align:center'>
-              <div style='font-size:0.62rem;color:rgba(232,220,200,0.4);
-                   font-family:IBM Plex Mono,monospace'>ACCURACY</div>
-              <div style='font-family:Playfair Display,serif;font-size:1.5rem;
-                   color:{color}'>{acc*100:.2f}%</div>
-            </div>
-            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:8px;text-align:center'>
-              <div style='font-size:0.62rem;color:rgba(232,220,200,0.4);
-                   font-family:IBM Plex Mono,monospace'>ROC-AUC</div>
-              <div style='font-family:Playfair Display,serif;font-size:1.5rem;
-                   color:{color}'>{auc:.4f}</div>
-            </div>
-            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:8px;text-align:center'>
-              <div style='font-size:0.62rem;color:rgba(232,220,200,0.4);
-                   font-family:IBM Plex Mono,monospace'>F1 SCORE</div>
-              <div style='font-family:Playfair Display,serif;font-size:1.5rem;
-                   color:{color}'>{f1:.4f}</div>
-            </div>
-            <div style='background:rgba(0,0,0,0.25);border-radius:5px;padding:8px;text-align:center'>
-              <div style='font-size:0.62rem;color:rgba(232,220,200,0.4);
-                   font-family:IBM Plex Mono,monospace'>RECALL</div>
-              <div style='font-family:Playfair Display,serif;font-size:1.5rem;
-                   color:{color}'>{rec:.4f}</div>
-            </div>
-          </div>
-
-          <div style='font-size:0.7rem;color:rgba(232,220,200,0.38);
-               font-family:IBM Plex Mono,monospace'>{desc}</div>
+        <div style='background:rgba(20,18,10,0.9);border:1px solid rgba(249,115,22,0.25);
+             border-top:3px solid #f97316;border-radius:8px;padding:16px;text-align:center'>
+          <div style='font-family:IBM Plex Mono,monospace;font-size:0.62rem;
+               color:rgba(249,115,22,0.7);letter-spacing:0.14em;
+               text-transform:uppercase;margin-bottom:8px'>{label}</div>
+          <div style='font-family:Playfair Display,serif;font-size:2rem;
+               color:#f97316;font-weight:700'>{fmt}</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.divider()
 
-    st.markdown("### 📈 Model Comparison — All Metrics")
-    models_list  = ["Random Forest", "Gradient Boosting", "AutoEncoder"]
-    metrics_data = {
-        "Accuracy (%)": [m["rf_acc"]*100, m["gb_acc"]*100, m["ae_acc"]*100],
-        "ROC-AUC":      [m["rf_auc"],     m["gb_auc"],     m["ae_auc"]],
-        "F1 Score":     [m["rf_f1"],      m["gb_f1"],      m["ae_f1"]],
-        "Precision":    [m["rf_prec"],    m["gb_prec"],    m["ae_prec"]],
-        "Recall":       [m["rf_rec"],     m["gb_rec"],     m["ae_rec"]],
-    }
-
-    comp1, comp2 = st.columns(2)
-    with comp1:
-        fig_comp = go.Figure()
-        bar_colors = [BLUE, GREEN, ORANGE]
-        for i, (model, color) in enumerate(zip(models_list, bar_colors)):
-            fig_comp.add_trace(go.Bar(
-                name=model,
-                x=list(metrics_data.keys()),
-                y=[v[i] for v in metrics_data.values()],
-                marker_color=color, marker_line_color="rgba(0,0,0,0.3)",
-                marker_line_width=1,
-                text=[f"{v[i]:.3f}" for v in metrics_data.values()],
-                textposition="outside",
-                textfont=dict(family="IBM Plex Mono", size=9),
-            ))
-        fig_comp = pl(fig_comp, "All Models — Side-by-Side Metric Comparison", 370)
-        fig_comp.update_layout(barmode="group", yaxis=dict(range=[0,1.1]),
-                               xaxis_title="Metric")
-        st.plotly_chart(fig_comp, use_container_width=True)
-
-    with comp2:
-        imp   = m["importances"]
-        colors_fi = []
-        for f in imp.index:
-            if f in SAT_FEATS:    colors_fi.append(ORANGE)
-            elif f in NASA_FEATS: colors_fi.append(PURPLE)
-            else:                 colors_fi.append(AMBER)
-
-        fig_imp = go.Figure(go.Bar(
-            x=imp.values, y=imp.index,
-            orientation="h",
-            marker_color=colors_fi,
-            marker_line_color="rgba(0,0,0,0.2)", marker_line_width=1,
-            text=[f"{v:.4f}" for v in imp.values], textposition="outside",
-            textfont=dict(family="IBM Plex Mono", size=9),
-        ))
-        fig_imp = pl(fig_imp,
-            "RF Feature Importance  🟠=Satellite  🟣=NASA  🟡=Financial", 370)
-        fig_imp.update_layout(xaxis_title="Importance Score",
-                              yaxis=dict(autorange="reversed"))
-        st.plotly_chart(fig_imp, use_container_width=True)
-
-    st.markdown("### 🎯 Confusion Matrices — All 3 Models")
+    # ── Confusion matrix + classification report side by side ────
+    st.markdown("### 🎯 Confusion Matrix & Classification Report")
     st.markdown("""
-    <div style='font-size:0.82rem;color:rgba(232,220,200,0.55);margin-bottom:14px'>
-    <b>TN</b> = Genuine correctly marked genuine &nbsp;|&nbsp;
+    <div style='font-size:0.82rem;color:rgba(232,220,200,0.5);margin-bottom:14px'>
+    <b>TN</b> = Genuine correctly passed &nbsp;|&nbsp;
     <b>TP</b> = Fraud correctly caught &nbsp;|&nbsp;
     <b>FP</b> = Genuine wrongly flagged &nbsp;|&nbsp;
-    <b>FN</b> = Fraud that slipped through (most important to minimise)
+    <b>FN</b> = Fraud that slipped through (minimise this)
     </div>
     """, unsafe_allow_html=True)
 
-    cm_cols = st.columns(3)
-    for i, (key, name, color, cscale) in enumerate([
-        ("rf", "Random Forest",    BLUE,   [[0,"#0f0e0b"],[1,"#1e3a5f"]]),
-        ("gb", "Gradient Boosting",GREEN,  [[0,"#0f0e0b"],[1,"#1a4a2a"]]),
-        ("ae", "AutoEncoder",      ORANGE, [[0,"#0f0e0b"],[1,"#4a2a0a"]]),
-    ]):
-        cm  = m[f"{key}_cm"]
-        tn, fp, fn, tp = cm.ravel()
-        txt = [[f"TN\n{tn:,}", f"FP\n{fp:,}"],
-               [f"FN\n{fn:,}", f"TP\n{tp:,}"]]
-        fig_cm = go.Figure(go.Heatmap(
-            z=cm, x=["Pred: Genuine","Pred: Fraud"],
-            y=["Actual: Genuine","Actual: Fraud"],
-            text=txt, texttemplate="%{text}",
-            colorscale=cscale, showscale=False,
-            textfont=dict(family="IBM Plex Mono", size=11, color=TEXT),
-        ))
-        fig_cm = pl(fig_cm, f"{name} — Confusion Matrix", 280)
-        cm_cols[i].plotly_chart(fig_cm, use_container_width=True)
+    cm_left, cm_right = st.columns([1, 1])
 
-        total_te = tn+fp+fn+tp
+    with cm_left:
+        ae_cm = m["ae_cm"]
+        tn, fp, fn, tp = ae_cm.ravel()
+        txt_cm = [[f"TN\n{tn:,}", f"FP\n{fp:,}"],
+                  [f"FN\n{fn:,}", f"TP\n{tp:,}"]]
+        fig_cm = go.Figure(go.Heatmap(
+            z=ae_cm,
+            x=["Predicted: Genuine", "Predicted: Fraud"],
+            y=["Actual: Genuine",    "Actual: Fraud"],
+            text=txt_cm, texttemplate="%{text}",
+            colorscale=[[0,"#0f0e0b"],[1,"#4a2a0a"]],
+            showscale=False,
+            textfont=dict(family="IBM Plex Mono", size=13, color=TEXT),
+        ))
+        fig_cm = pl(fig_cm, "🤖 AutoEncoder — Confusion Matrix", 340)
+        st.plotly_chart(fig_cm, use_container_width=True)
+
+        total_te = tn + fp + fn + tp
         fraud_caught_pct = tp/(tp+fn)*100 if (tp+fn) else 0
         false_alarm_pct  = fp/(fp+tn)*100 if (fp+tn) else 0
-        cm_cols[i].markdown(f"""
-        <div style='background:rgba(20,18,10,0.8);border:1px solid {color}22;
-             border-radius:6px;padding:10px 12px;margin-top:-8px;
-             font-family:IBM Plex Mono,monospace;font-size:0.72rem;'>
-          <div style='color:{color};margin-bottom:5px;font-weight:600'>{name}</div>
-          <div style='color:rgba(232,220,200,0.6);line-height:1.9'>
-            Fraud caught: <b style='color:#86efac'>{fraud_caught_pct:.1f}%</b>
-            ({tp:,}/{tp+fn:,})<br>
-            False alarms: <b style='color:#f87171'>{false_alarm_pct:.1f}%</b>
-            ({fp:,}/{fp+tn:,})<br>
-            Overall acc: <b style='color:{color}'>{(tn+tp)/total_te*100:.2f}%</b>
+        st.markdown(f"""
+        <div style='background:rgba(20,18,10,0.85);
+             border:1px solid rgba(249,115,22,0.2);
+             border-radius:6px;padding:14px 18px;
+             font-family:IBM Plex Mono,monospace;font-size:0.76rem;'>
+          <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;
+               text-align:center'>
+            <div>
+              <div style='color:rgba(232,220,200,0.4);font-size:0.62rem;
+                   margin-bottom:4px'>FRAUD CAUGHT</div>
+              <div style='color:#86efac;font-size:1.2rem;font-weight:700'>
+                {fraud_caught_pct:.1f}%</div>
+              <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
+                {tp:,} / {tp+fn:,}</div>
+            </div>
+            <div>
+              <div style='color:rgba(232,220,200,0.4);font-size:0.62rem;
+                   margin-bottom:4px'>FALSE ALARMS</div>
+              <div style='color:#f87171;font-size:1.2rem;font-weight:700'>
+                {false_alarm_pct:.1f}%</div>
+              <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
+                {fp:,} / {fp+tn:,}</div>
+            </div>
+            <div>
+              <div style='color:rgba(232,220,200,0.4);font-size:0.62rem;
+                   margin-bottom:4px'>OVERALL ACC</div>
+              <div style='color:#f97316;font-size:1.2rem;font-weight:700'>
+                {(tn+tp)/total_te*100:.2f}%</div>
+              <div style='color:rgba(232,220,200,0.35);font-size:0.62rem'>
+                {tn+tp:,} / {total_te:,}</div>
+            </div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
-    st.divider()
-
-    st.markdown("### 📋 Full Classification Reports")
-    rpt_cols = st.columns(3)
-    y_te = m["y_te"]
-    for col_w, preds, name, color in [
-        (rpt_cols[0], m["rf_preds"], "Random Forest",    BLUE),
-        (rpt_cols[1], m["gb_preds"], "Gradient Boosting",GREEN),
-        (rpt_cols[2], m["ae_preds"], "AutoEncoder",       ORANGE),
-    ]:
-        rpt = classification_report(y_te, preds,
+    with cm_right:
+        y_te = m["y_te"]
+        ae_preds = m["ae_preds"]
+        rpt = classification_report(y_te, ae_preds,
               target_names=["Genuine","Fraud"], output_dict=True)
         rows = []
         for cls in ["Genuine","Fraud","macro avg","weighted avg"]:
@@ -951,40 +909,69 @@ with tab3:
                     "Support":   f"{int(r['support']):,}" if "support" in r else "—",
                 })
         rpt_df = pd.DataFrame(rows)
-        col_w.markdown(
-            f"<div style='font-family:IBM Plex Mono,monospace;"
-            f"font-size:0.72rem;color:{color};margin-bottom:4px;font-weight:600'>"
-            f"{name}</div>",
-            unsafe_allow_html=True
-        )
-        col_w.dataframe(rpt_df.set_index("Class"), use_container_width=True)
+        st.markdown("""
+        <div style='font-family:IBM Plex Mono,monospace;font-size:0.72rem;
+             color:#f97316;margin-bottom:8px;font-weight:600'>
+        📋 AutoEncoder — Full Classification Report</div>
+        """, unsafe_allow_html=True)
+        st.dataframe(rpt_df.set_index("Class"), use_container_width=True, height=220)
+
+        # Gauge-style metric bars
+        st.markdown("""
+        <div style='font-family:IBM Plex Mono,monospace;font-size:0.7rem;
+             color:rgba(232,220,200,0.5);margin:18px 0 10px'>METRIC OVERVIEW</div>
+        """, unsafe_allow_html=True)
+        for metric_label, value, color in [
+            ("Accuracy",  ae_acc,  "#f97316"),
+            ("ROC-AUC",   ae_auc,  "#f97316"),
+            ("F1 Score",  ae_f1,   "#fbbf24"),
+            ("Precision", ae_prec, "#60a5fa"),
+            ("Recall",    ae_rec,  "#86efac"),
+        ]:
+            bar_w = int(value * 100)
+            st.markdown(f"""
+            <div style='margin-bottom:8px'>
+              <div style='display:flex;justify-content:space-between;
+                   font-family:IBM Plex Mono,monospace;font-size:0.68rem;
+                   margin-bottom:3px'>
+                <span style='color:rgba(232,220,200,0.55)'>{metric_label}</span>
+                <span style='color:{color};font-weight:600'>{value:.4f}</span>
+              </div>
+              <div style='height:6px;background:rgba(255,255,255,0.07);border-radius:3px'>
+                <div style='width:{bar_w}%;height:100%;
+                     background:{color};border-radius:3px;
+                     transition:width 0.5s ease'></div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.divider()
 
-    st.markdown("### 📊 Ensemble Risk Score Distribution")
+    # ── AutoEncoder anomaly score distribution ───────────────────
+    st.markdown("### 📊 AutoEncoder Anomaly Score Distribution")
     st.markdown("""
     <div style='font-size:0.82rem;color:rgba(232,220,200,0.5);margin-bottom:12px'>
-    Final score = 50% RF + 30% GB + 20% AutoEncoder. Score &gt;0.75 = HIGH RISK.
+    Higher score = more anomalous = more likely to be fraud.
+    Genuine claims cluster near 0; fraud claims are pushed right.
     </div>
     """, unsafe_allow_html=True)
 
     df_all_scores = st.session_state["df"]
-    if "ensemble_score" in df_all_scores.columns:
-        fig_ens = go.Figure()
-        for lbl, name, col in [(0,"Genuine","#4ade80"),(1,"Fraud","#f87171")]:
-            s = df_all_scores[df_all_scores["fraud_label"]==lbl]["ensemble_score"].dropna()
-            fig_ens.add_trace(go.Histogram(x=s, nbinsx=50, name=name,
-                marker_color=col, opacity=0.7))
-        fig_ens.add_vline(x=0.50, line_dash="dash", line_color=AMBER,
-                          annotation_text="Medium Risk (0.50)")
-        fig_ens.add_vline(x=0.75, line_dash="dash", line_color=RED,
-                          annotation_text="High Risk (0.75)")
-        fig_ens = pl(fig_ens, "Ensemble Score: Genuine vs Fraud Distribution", 300)
-        fig_ens.update_layout(barmode="overlay",
-            xaxis_title="Risk Score (0=safe, 1=high risk)")
-        st.plotly_chart(fig_ens, use_container_width=True)
+    if "ae_score" in df_all_scores.columns:
+        fig_ae = go.Figure()
+        for lbl, name_lbl, col in [(0,"Genuine","#4ade80"),(1,"Fraud","#f87171")]:
+            s = df_all_scores[df_all_scores["fraud_label"]==lbl]["ae_score"].dropna()
+            fig_ae.add_trace(go.Histogram(x=s, nbinsx=60, name=name_lbl,
+                marker_color=col, opacity=0.72))
+        fig_ae = pl(fig_ae, "🤖 AutoEncoder Anomaly Score — Genuine vs Fraud", 320)
+        fig_ae.update_layout(barmode="overlay",
+            xaxis_title="Anomaly Score (0 = normal, 1 = highly anomalous)")
+        st.plotly_chart(fig_ae, use_container_width=True)
 
+    # ── Verdict distribution ─────────────────────────────────────
     if "verdict" in df.columns:
+        st.divider()
+        st.markdown("### 🏷️ Final Verdict Distribution")
         vd = df["verdict"].value_counts()
         vd_colors = []
         for v in vd.index:
