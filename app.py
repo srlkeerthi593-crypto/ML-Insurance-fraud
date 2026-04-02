@@ -169,28 +169,19 @@ def pl(fig, title="", h=320):
 # ═══════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def load_data(ins_path, sat_path):
-    """
-    Load + merge insurance & satellite CSVs.
-    Engineer features, apply satellite fraud rules.
-    Add NASA POWER temperature proxies (static district means).
-    Returns fully processed DataFrame.
-    """
     df  = pd.read_csv(ins_path)
     sat = pd.read_csv(sat_path)
 
-    # ── Scale loss_percent (0–1 → 0–100) ─────────────────────
     if df["loss_percent"].max() <= 1.0:
         df["loss_percent"] = df["loss_percent"] * 100
 
     df["year"]           = df["year"].astype(int)
     df["district_clean"] = df["district"].str.strip().str.title()
 
-    # ── Clean satellite table ─────────────────────────────────
     sat = sat.drop(columns=["system:index",".geo"], errors="ignore")
     sat["year"]     = sat["year"].astype(int)
     sat["district"] = sat["district"].str.strip().str.title()
 
-    # ── Merge GEE data ────────────────────────────────────────
     df = df.merge(
         sat[["district","year","ndvi","ndwi","evi",
              "chirps_rain_mm","flood_fraction"]],
@@ -198,13 +189,10 @@ def load_data(ins_path, sat_path):
         right_on=["district","year"], how="left"
     ).drop(columns=["district_y"], errors="ignore")
 
-    # ── Vegetation Condition Index (VCI) ─────────────────────
-    # VCI < 35 = drought stress; VCI > 60 = healthy vegetation
     ndvi_min = df.groupby("district_clean")["ndvi"].transform("min")
     ndvi_max = df.groupby("district_clean")["ndvi"].transform("max")
     df["vci"] = ((df["ndvi"]-ndvi_min)/(ndvi_max-ndvi_min+1e-8)*100).clip(0,100)
 
-    # ── Satellite condition flags ─────────────────────────────
     df["drought_detected_sat"] = (df["vci"] < 35).astype(int)
     df["flood_detected_sat"]   = (df["flood_fraction"] > 0.01).astype(int)
     ndvi_p75 = df.groupby("district_clean")["ndvi"].transform(
@@ -212,27 +200,18 @@ def load_data(ins_path, sat_path):
     df["good_vegetation_sat"]  = (df["ndvi"] >= ndvi_p75).astype(int)
     chirps_med = df.groupby("district_clean")["chirps_rain_mm"].transform("median")
 
-    # ════════════════════════════════════════════════════════
-    # 3 SATELLITE FRAUD RULES (from notebook Cell 12)
-    # ════════════════════════════════════════════════════════
-    # Rule 1 — FAKE DROUGHT: claimed loss≥20% BUT VCI>60 (crops healthy)
-    #           AND chirps rain was ≥80% of normal
     df["fraud_fake_drought"] = (
         (df["loss_percent"] >= 20) &
         (df["vci"] > 60) &
         (df["chirps_rain_mm"] > chirps_med * 0.80)
     ).astype(int)
 
-    # Rule 2 — FAKE FLOOD: claimed loss≥20% BUT flood_fraction<0.5%
-    #           AND NDWI<0.10 (no water body signal)
     df["fraud_fake_flood"] = (
         (df["loss_percent"] >= 20) &
         (df["flood_fraction"] < 0.005) &
         (df["ndwi"] < 0.10)
     ).astype(int)
 
-    # Rule 3 — HIDDEN GOOD YIELD: claimed loss≥20% BUT NDVI in top 25%
-    #           of district AND VCI>65 (excellent vegetation)
     df["fraud_hidden_yield"] = (
         (df["loss_percent"] >= 20) &
         (df["ndvi"] >= ndvi_p75) &
@@ -245,7 +224,6 @@ def load_data(ins_path, sat_path):
         df["fraud_hidden_yield"]
     ).astype(int)
 
-    # ── Financial feature engineering ────────────────────────
     df["claim_per_hectare"]      = df["claim_amount_rs"] / (df["area_hectares"]+0.01)
     df["claim_premium_ratio"]    = df["claim_amount_rs"] / (df["insurance_premium_rs"]+1)
     df["claim_value_ratio"]      = df["claim_amount_rs"] / (df["crop_value_rs"]+0.01)
@@ -256,9 +234,6 @@ def load_data(ins_path, sat_path):
     )
     df["rainfall_mismatch_flag"] = (df["rainfall_deviation_pct"].abs() > 40).astype(int)
 
-    # ── NASA POWER temperature (district annual means) ────────
-    # Static means derived from NASA POWER API (district-level)
-    # These match the values fetched in notebook Cell 16
     NASA_TMAX = {
         "Anantapur":34.2, "Chittoor":32.5, "East Godavari":31.8,
         "Guntur":33.1, "Kadapa":33.8, "Krishna":32.4,
@@ -283,24 +258,16 @@ def load_data(ins_path, sat_path):
 
 
 # ═══════════════════════════════════════════════════════════
-# MODEL TRAINING — RF + GB + AutoEncoder (IsolationForest)
-# Exactly mirrors Cell 20 (clean features, no leakage)
+# MODEL TRAINING
 # ═══════════════════════════════════════════════════════════
 FEATURES_CLEAN = [
-    # Farm observables
     "area_hectares", "production_per_hectare", "loss_percent",
-    # Financial ratios
     "claim_per_hectare", "claim_premium_ratio", "claim_value_ratio",
-    # Farmer-reported rainfall
     "rainfall_mm",
-    # 🛰️ Raw GEE satellite indices
     "ndvi", "ndwi", "evi", "vci", "chirps_rain_mm", "flood_fraction",
-    # NASA POWER temperature
     "nasa_tmax_c", "nasa_tmin_c", "nasa_solar_rad",
-    # Derived (not fraud-specific)
     "rainfall_deviation_pct", "rainfall_mismatch_flag",
     "heat_stress_flag", "cold_stress_flag", "drought_index_norm",
-    # Categorical
     "crop_encoded"
 ]
 
@@ -312,11 +279,6 @@ NASA_FEATS = {"nasa_tmax_c","nasa_tmin_c","nasa_solar_rad",
 
 @st.cache_resource(show_spinner=False)
 def train_all_models(_df_id):
-    """
-    Train RF, GB, and AutoEncoder (IsolationForest-based) on the full dataset.
-    Returns dict with all models, metrics, predictions, and ensemble scores.
-    Mirrors notebook Cell 20 exactly.
-    """
     df = st.session_state["df"]
     X  = df[FEATURES_CLEAN].fillna(df[FEATURES_CLEAN].median())
     y  = df["fraud_label"]
@@ -328,7 +290,6 @@ def train_all_models(_df_id):
     X_tr_s     = scaler.fit_transform(X_tr)
     X_te_s     = scaler.transform(X_te)
 
-    # ── MODEL 1: RANDOM FOREST ────────────────────────────────
     rf = RandomForestClassifier(
         n_estimators=300, max_depth=12, min_samples_leaf=4,
         class_weight="balanced", random_state=42, n_jobs=-1
@@ -338,7 +299,6 @@ def train_all_models(_df_id):
     rf_proba = rf.predict_proba(X_te_s)[:, 1]
     rf_cm    = confusion_matrix(y_te, rf_preds)
 
-    # ── MODEL 2: GRADIENT BOOSTING ────────────────────────────
     gb = GradientBoostingClassifier(
         n_estimators=200, learning_rate=0.05,
         max_depth=5, random_state=42
@@ -348,20 +308,16 @@ def train_all_models(_df_id):
     gb_proba = gb.predict_proba(X_te_s)[:, 1]
     gb_cm    = confusion_matrix(y_te, gb_preds)
 
-    # ── MODEL 3: AUTOENCODER (IsolationForest proxy) ──────────
-    # Trains only on genuine claims — anomaly = fraud
-    # IsolationForest is equivalent to an anomaly autoencoder:
-    # isolates points that differ from the normal distribution
     fraud_contamination = float(y.mean())
     ae_model = IsolationForest(
         n_estimators=200,
         contamination=fraud_contamination,
         random_state=42
     )
-    ae_model.fit(X_tr_s[y_tr == 0])           # train on genuine only
+    ae_model.fit(X_tr_s[y_tr == 0])
 
     ae_raw    = ae_model.decision_function(X_te_s)
-    ae_scores = -ae_raw                        # higher = more anomalous
+    ae_scores = -ae_raw
 
     prec_c, rec_c, thresh_c = precision_recall_curve(y_te, ae_scores)
     f1s_c    = 2 * (prec_c * rec_c) / (prec_c + rec_c + 1e-8)
@@ -369,7 +325,6 @@ def train_all_models(_df_id):
     ae_preds = (ae_scores > best_thr).astype(int)
     ae_cm    = confusion_matrix(y_te, ae_preds)
 
-    # ── ENSEMBLE SCORE on full dataset ────────────────────────
     X_full   = df[FEATURES_CLEAN].fillna(df[FEATURES_CLEAN].median())
     X_full_s = scaler.transform(X_full)
 
@@ -380,7 +335,6 @@ def train_all_models(_df_id):
     ae_norm        = MinMaxScaler()
     ae_full_norm   = ae_norm.fit_transform(ae_full_scores.reshape(-1,1)).flatten()
 
-    # Ensemble: 50% RF + 30% GB + 20% AE
     df["rf_score"]       = rf_full_proba
     df["gb_score"]       = gb_full_proba
     df["ae_score"]       = ae_full_norm
@@ -403,34 +357,28 @@ def train_all_models(_df_id):
     st.session_state["df"] = df
 
     return {
-        # Models
         "rf": rf, "gb": gb, "ae": ae_model,
         "scaler": scaler, "ae_norm": ae_norm,
         "features": FEATURES_CLEAN,
-        # Test data
         "y_te": y_te,
-        # RF results
         "rf_preds": rf_preds, "rf_proba": rf_proba, "rf_cm": rf_cm,
         "rf_acc":  accuracy_score(y_te, rf_preds),
         "rf_auc":  roc_auc_score(y_te, rf_proba),
         "rf_f1":   f1_score(y_te, rf_preds),
         "rf_prec": precision_score(y_te, rf_preds),
         "rf_rec":  recall_score(y_te, rf_preds),
-        # GB results
         "gb_preds": gb_preds, "gb_proba": gb_proba, "gb_cm": gb_cm,
         "gb_acc":  accuracy_score(y_te, gb_preds),
         "gb_auc":  roc_auc_score(y_te, gb_proba),
         "gb_f1":   f1_score(y_te, gb_preds),
         "gb_prec": precision_score(y_te, gb_preds),
         "gb_rec":  recall_score(y_te, gb_preds),
-        # AE results
         "ae_preds": ae_preds, "ae_scores_test": ae_scores, "ae_cm": ae_cm,
         "ae_acc":  accuracy_score(y_te, ae_preds),
         "ae_auc":  roc_auc_score(y_te, ae_scores),
         "ae_f1":   f1_score(y_te, ae_preds),
         "ae_prec": precision_score(y_te, ae_preds, zero_division=0),
         "ae_rec":  recall_score(y_te, ae_preds),
-        # Feature importance
         "importances": pd.Series(rf.feature_importances_,
                                   index=FEATURES_CLEAN).sort_values(ascending=False),
     }
@@ -451,19 +399,59 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("**📂 Data Files**")
-    ins_file = st.file_uploader("Insurance CSV", type=["csv"])
-    sat_file = st.file_uploader("Satellite CSV (GEE)", type=["csv"])
+    st.markdown(
+        "<small>Upload both CSV files to begin analysis</small>",
+        unsafe_allow_html=True
+    )
+    ins_file = st.file_uploader("📋 Insurance CSV", type=["csv"])
+    sat_file = st.file_uploader("🛰️ Satellite CSV (GEE)", type=["csv"])
 
-    DEFAULT_INS = "/mnt/user-data/uploads/ap_synthetic_agri_insurance_2000_2025_12000rows__1_.csv"
-    DEFAULT_SAT = "/mnt/user-data/uploads/AP_satellite_indices.csv"
-    ins_path = ins_file if ins_file else DEFAULT_INS
-    sat_path = sat_file if sat_file else DEFAULT_SAT
+    # ── KEY FIX: only load when both files are uploaded ───
+    data_ready = False
+    if ins_file is not None and sat_file is not None:
+        # Re-load if new files are uploaded
+        file_key = f"{ins_file.name}_{sat_file.name}_{ins_file.size}_{sat_file.size}"
+        if st.session_state.get("_file_key") != file_key:
+            # Clear stale cache when files change
+            if "df" in st.session_state:
+                del st.session_state["df"]
+            if "models" in st.session_state:
+                del st.session_state["models"]
+            st.session_state["_file_key"] = file_key
 
-    # Load data into session state
-    if "df" not in st.session_state:
-        with st.spinner("⏳ Loading & processing data..."):
-            st.session_state["df"] = load_data(ins_path, sat_path)
+        if "df" not in st.session_state:
+            with st.spinner("⏳ Loading & processing data..."):
+                try:
+                    st.session_state["df"] = load_data(ins_file, sat_file)
+                    st.success("✅ Data loaded!")
+                except Exception as e:
+                    st.error(f"❌ Error loading data: {e}")
+                    st.stop()
 
+        data_ready = True
+    else:
+        st.info("⬆️ Upload both CSV files above to begin.")
+
+    if not data_ready:
+        st.divider()
+        st.markdown("""
+        <div style='font-family:IBM Plex Mono,monospace;font-size:0.62rem;
+        color:rgba(232,220,200,0.3);line-height:1.9'>
+        📡 DATA SOURCES<br>
+        GEE: MODIS NDVI/NDWI/EVI<br>
+        GEE: CHIRPS Rainfall<br>
+        GEE: Flood Fraction<br>
+        NASA POWER: Temp/Solar<br><br>
+        🤖 MODELS<br>
+        1. Random Forest (300 trees)<br>
+        2. Gradient Boosting (200)<br>
+        3. AutoEncoder/IsoForest<br>
+        4. Ensemble (50+30+20%)
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+
+    # ── From here on, data is loaded ─────────────────────
     df_all = st.session_state["df"]
 
     st.divider()
@@ -485,6 +473,7 @@ with st.sidebar:
     if st.button("🤖 TRAIN ALL 3 MODELS", use_container_width=True):
         if "models" in st.session_state:
             del st.session_state["models"]
+        st.cache_resource.clear()
 
     if "models" not in st.session_state:
         with st.spinner("🤖 Training RF + GB + AutoEncoder..."):
@@ -535,7 +524,7 @@ st.markdown("""
        color:rgba(232,220,200,0.4);letter-spacing:0.22em;margin-top:5px'>
        ANDHRA PRADESH · CROP INSURANCE FRAUD DETECTION · 2000–2025</div>
   <div style='font-size:0.88rem;color:rgba(232,220,200,0.55);margin-top:7px;max-width:700px'>
-       Satellite (GEE) + NASA POWER cross-check of 12,480 insurance claims using
+       Satellite (GEE) + NASA POWER cross-check of insurance claims using
        3 ML models to catch fake drought, fake flood and hidden-yield fraud.
   </div>
 </div>
@@ -607,7 +596,6 @@ with tab1:
 
     ov1, ov2 = st.columns([3,2])
     with ov1:
-        # Donut chart
         fig_pie = go.Figure(go.Pie(
             labels=["✅ Genuine","🏜️ Fake Drought","🌊 Fake Flood","🌿 Hidden Yield"],
             values=[genuine, d_cases, f_cases, y_cases],
@@ -653,7 +641,6 @@ with tab1:
             </div>
             """, unsafe_allow_html=True)
 
-    # Trend
     yearly = df.groupby("year").agg(
         fake_drought=("fraud_fake_drought","sum"),
         fake_flood=("fraud_fake_flood","sum"),
@@ -753,11 +740,10 @@ with tab2:
 
 
 # ════════════════════════════════════════════════════════
-# TAB 3 — ML MODELS & COMPARISON (the fixed tab)
+# TAB 3 — ML MODELS & COMPARISON
 # ════════════════════════════════════════════════════════
 with tab3:
 
-    # ── Model explainer cards ────────────────────────────────
     st.markdown("""
     <div class='agri-card' style='margin-bottom:18px'>
       <div style='font-family:Playfair Display,serif;font-size:1rem;
@@ -785,7 +771,6 @@ with tab3:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Per-model metric cards ────────────────────────────────
     st.markdown("### 📊 Individual Model Results")
     mc1, mc2, mc3 = st.columns(3)
 
@@ -842,7 +827,6 @@ with tab3:
 
     st.divider()
 
-    # ── Side-by-side comparison bar chart ────────────────────
     st.markdown("### 📈 Model Comparison — All Metrics")
     models_list  = ["Random Forest", "Gradient Boosting", "AutoEncoder"]
     metrics_data = {
@@ -874,11 +858,10 @@ with tab3:
         st.plotly_chart(fig_comp, use_container_width=True)
 
     with comp2:
-        # Feature importance
         imp   = m["importances"]
         colors_fi = []
         for f in imp.index:
-            if f in SAT_FEATS:   colors_fi.append(ORANGE)
+            if f in SAT_FEATS:    colors_fi.append(ORANGE)
             elif f in NASA_FEATS: colors_fi.append(PURPLE)
             else:                 colors_fi.append(AMBER)
 
@@ -896,7 +879,6 @@ with tab3:
                               yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_imp, use_container_width=True)
 
-    # ── Confusion matrices — ALL 3 ────────────────────────────
     st.markdown("### 🎯 Confusion Matrices — All 3 Models")
     st.markdown("""
     <div style='font-size:0.82rem;color:rgba(232,220,200,0.55);margin-bottom:14px'>
@@ -927,7 +909,6 @@ with tab3:
         fig_cm = pl(fig_cm, f"{name} — Confusion Matrix", 280)
         cm_cols[i].plotly_chart(fig_cm, use_container_width=True)
 
-        # Derived stats below the chart
         total_te = tn+fp+fn+tp
         fraud_caught_pct = tp/(tp+fn)*100 if (tp+fn) else 0
         false_alarm_pct  = fp/(fp+tn)*100 if (fp+tn) else 0
@@ -948,7 +929,6 @@ with tab3:
 
     st.divider()
 
-    # ── Classification reports as formatted tables ────────────
     st.markdown("### 📋 Full Classification Reports")
     rpt_cols = st.columns(3)
     y_te = m["y_te"]
@@ -977,14 +957,10 @@ with tab3:
             f"{name}</div>",
             unsafe_allow_html=True
         )
-        col_w.dataframe(
-            rpt_df.set_index("Class"),
-            use_container_width=True
-        )
+        col_w.dataframe(rpt_df.set_index("Class"), use_container_width=True)
 
     st.divider()
 
-    # ── Ensemble score distribution ───────────────────────────
     st.markdown("### 📊 Ensemble Risk Score Distribution")
     st.markdown("""
     <div style='font-size:0.82rem;color:rgba(232,220,200,0.5);margin-bottom:12px'>
@@ -1008,7 +984,6 @@ with tab3:
             xaxis_title="Risk Score (0=safe, 1=high risk)")
         st.plotly_chart(fig_ens, use_container_width=True)
 
-    # ── Verdict distribution ──────────────────────────────────
     if "verdict" in df.columns:
         vd = df["verdict"].value_counts()
         vd_colors = []
@@ -1084,7 +1059,6 @@ with tab4:
             xaxis=dict(tickangle=-35), yaxis_title="Cases")
         st.plotly_chart(fig_st, use_container_width=True)
 
-    # Satellite indices by district
     sat_d = df.groupby("district_clean").agg(
         avg_ndvi=("ndvi","mean"), avg_vci=("vci","mean"),
     ).reset_index().sort_values("avg_ndvi", ascending=False)
@@ -1118,7 +1092,6 @@ with tab4:
     fig_sat2.update_yaxes(gridcolor=GRID, autorange="reversed")
     st.plotly_chart(fig_sat2, use_container_width=True)
 
-    # District summary table
     st.markdown("### 📋 District Summary Table")
     for _, row in dist.iterrows():
         r = row["fraud_rate"]
@@ -1298,7 +1271,6 @@ with tab5:
     if len(view) == 0:
         st.info("No claims match the current filters.")
 
-    # Downloads
     st.divider()
     dl1, dl2 = st.columns(2)
     with dl1:
